@@ -55,7 +55,10 @@ def process(args):
             else:
                 print "can not find %s in %s"%(dn, diskpref)
                 return
-    if minutes: print "idle minutes: %.2f"%(minutes)
+    if minutes: 
+        print "idle minutes: %.2f"%(minutes)
+    else:
+        print "monitoring mode"
     print "polling every %d seconds"%(args.monitor_seconds)
     dmap = diskmap(disks)
     dset = sorted(dmap.keys())
