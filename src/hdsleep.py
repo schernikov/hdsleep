@@ -146,25 +146,21 @@ def date_diff(older, newer):
     else:
         timeDiff = newer - older
         post = ''
-    days = timeDiff.days
-    hours = timeDiff.seconds/3600
-    remsec = timeDiff.seconds%3600
-    minutes = remsec/60
-    seconds = remsec%60
 
-    if days > 1:
-        val = days; nm = 'days'
-    elif hours > 1:
-        val = hours; nm = 'hours'
-    elif minutes > 1:
-        val = minutes; nm = 'minutes'
-    elif seconds > 1:
-        val = seconds; nm = 'seconds'
-    elif seconds == 1:
-        val = 1; nm = 'second'
-    else:
-        val = 0; nm = "now"
-    return val, nm + post
+    if timeDiff.days > 1:
+        return timeDiff.days, 'days'+post
+    total_seconds = int(timeDiff.total_seconds())
+    hours = total_seconds/3600
+    if hours > 1:
+        return hours, 'hours'+post
+    minutes = total_seconds/60
+    if minutes > 1:
+        return minutes, 'minutes'+post
+    if total_seconds > 1:
+        return total_seconds, 'seconds'+post
+    if total_seconds == 1:
+        return 1, 'second'+post
+    return 0, 'now'
 
 def sleep(nm):
     subprocess.call('hdparm -y %s'%(devname(nm)))
