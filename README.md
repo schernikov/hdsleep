@@ -25,3 +25,20 @@ polling every 10 seconds
   /dev/sdc                            w +3=24028  30 seconds    2013-01-19 10:58:21.340573
   /dev/sdb                                        16 minutes    2013-01-19 11:03:41.720453 standby
 </pre>
+
+Help output:
+<pre>
+linux>:~/workspace/hdsleep/src$ python hdsleep.py -h
+usage: hdsleep.py [-h] [-S minutes] [-m seconds] disk [disk ...]
+
+positional arguments:
+  disk                  disk name
+
+optional arguments:
+  -h, --help            show this help message and exit
+  -S minutes, --sleep-minutes minutes
+                        idle minutes before sleep
+  -m seconds, --monitor-seconds seconds
+                        monitor disk usage
+
+</pre>
