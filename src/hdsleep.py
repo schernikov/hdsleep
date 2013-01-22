@@ -13,13 +13,19 @@ statre = re.compile('\s*(?P<devmaj>\d+)\s+(?P<devmin>\d+)\s+(?P<devname>\w+)\s+'
 drivere = re.compile('\s*drive state is:\s*(?P<state>[^\s]+)')
 diskline = re.compile('\s*/dev/(?P<name>\w+)\:')
 
+DEVNULL = open(os.devnull, 'wb')
 diskpref = '/dev/disk/by-id/'
 polltime = 10 # seconds
+posttimes = 2 # times
 
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('-S', '--sleep-minutes', metavar='minutes', help='idle minutes before sleep', type=float)
-    parser.add_argument('-m', '--monitor-seconds', metavar='seconds', default=polltime, type=float, help='monitor disk usage')
+    parser.add_argument('-m', '--monitor-seconds', metavar='seconds', default=polltime, type=float, 
+                        help='monitor disk usage (default:%(default)ss)')
+    parser.add_argument('-p', '--postpone', metavar='N', default=posttimes, 
+                        help="delay sending 'hdparm -y ...' N monitoring cycles "
+                        "and hope drive will go sleep itself (default:%(default)s)", type=int)
     parser.add_argument('disks', metavar='disk', type=str, nargs='+', help='disk name')
     args = parser.parse_args()
     try:
@@ -39,6 +45,10 @@ def process(args):
             print "idle time should be positive, got %.2f"%(minutes)
             return
         idle = datetime.timedelta(minutes=minutes)
+        if args.postpone < 0:
+            print "postpone count must be non-negative, got %d"%(args.postpone)
+            return
+        remcode = time2hdparm(idle.total_seconds())
     else:
         idle = None
     disks = []
@@ -56,7 +66,7 @@ def process(args):
                 print "can not find %s in %s"%(dn, diskpref)
                 return
     if minutes: 
-        print "idle minutes: %.2f"%(minutes)
+        print "put drives to sleep in %.2f idle minutes"%(minutes)
     else:
         print "monitoring mode"
     print "polling every %d seconds"%(args.monitor_seconds)
@@ -67,6 +77,7 @@ def process(args):
     prevmod = {}
     prevstat = {}
     stamps = {}
+    postpone = {}
     now = datetime.datetime.now()
     for nm in dset:
         dstat = dstats[nm]
@@ -76,6 +87,7 @@ def process(args):
         prev['writes'] = dstat['writes']
         prevstat[nm] = prev
         prevmod[nm] = dstates[nm]
+        postpone[nm] = None
         stamps[nm] = now
     print
 
@@ -86,35 +98,41 @@ def process(args):
         now = datetime.datetime.now()
         for nm in dset:
             dstat = dstats[nm] 
-            if idle:
-                if checkstate(prevstat[nm], dstat):
-                    stamps[nm] = now
+            reads = checktype(prevstat[nm], dstat, 'reads')
+            writes = checktype(prevstat[nm], dstat, 'writes')
+            if reads != 0 or writes != 0 or prevmod[nm] != dstates[nm]:
+                if reads != 0:
+                    rs = "%7s=%d"%('r +%d'%reads, dstat['reads'])
                 else:
-                    if (stamps[nm] + idle) <= now:  # time to put it to sleep
-                        if dstat['activeIOs'] == 0: # do this only if no active IO is going on
-                            if dstates[nm].find('active') >= 0: # and only if it is currently active
-                                #print "putting %s to sleep"%(nm)
-                                sleep(nm)
-            else:
-                reads = checktype(prevstat[nm], dstat, 'reads')
-                writes = checktype(prevstat[nm], dstat, 'writes')
-                if reads != 0 or writes != 0 or prevmod[nm] != dstates[nm]:
-                    if reads != 0:
-                        rs = "%7s=%d"%('r +%d'%reads, dstat['reads'])
+                    rs = ' '
+                if writes != 0:
+                    ws = "%7s=%d"%('w +%d'%writes, dstat['writes'])
+                else:
+                    ws = ' '
+                if prevmod[nm] != dstates[nm]:
+                    ms = dstates[nm]
+                else:
+                    ms = ' '
+                val, txt = date_diff(stamps[nm], now)
+                print "%10s %18s %18s %3s %-10s %-s %s"%(devname(nm), rs, ws, str(val) if val!=0 else ' ', txt, now.strftime('%Y-%m-%d %H:%M:%S'), ms)
+                stamps[nm] = now
+            prevmod[nm] = dstates[nm]
+            if idle:
+                if (stamps[nm] + idle) <= now:  # time to put it to sleep
+                    if dstates[nm].find('active') >= 0: # and only if it is currently active
+                        if postpone[nm] is None: 
+                            postpone[nm] = args.postpone
+                            remind(nm, remcode, now)    # remind this drive that it has to go to sleep sometimes
+                        else:
+                            postpone[nm] -= 1
+                        if postpone[nm] <= 0 and dstat['activeIOs'] == 0:
+                            # do this only if no active IO is going on
+                            sleep(nm, now)
+                            postpone[nm] = None
                     else:
-                        rs = ' '
-                    if writes != 0:
-                        ws = "%7s=%d"%('w +%d'%writes, dstat['writes'])
-                    else:
-                        ws = ' '
-                    if prevmod[nm] != dstates[nm]:
-                        ms = dstates[nm]
-                    else:
-                        ms = ' '
-                    val, txt = date_diff(stamps[nm], now)
-                    print "%10s %18s %18s %3s %-10s %-s %s"%(devname(nm), rs, ws, str(val) if val!=0 else ' ', txt, now.isoformat(' '), ms)
-                    stamps[nm] = now
-                prevmod[nm] = dstates[nm]
+                        postpone[nm] = None
+                else:
+                    postpone[nm] = None
 
 def updatestate(prev, cur, tp):
     prev[tp] = cur[tp]
@@ -123,11 +141,6 @@ def checktype(prev, cur, tp):
     diff = cur[tp]-prev[tp]
     if diff > 0: prev[tp] = cur[tp]
     return diff
-
-def checkstate(prev, cur):
-    reads = checktype(prev, cur, 'reads') 
-    writes = checktype(prev, cur, 'writes')
-    return (reads != 0) or (writes != 0)
 
 def devname(nm):
     return '/dev/%s'%(nm)
@@ -162,8 +175,14 @@ def date_diff(older, newer):
         return 1, 'second'+post
     return 0, 'now'
 
-def sleep(nm):
-    subprocess.call('hdparm -y %s'%(devname(nm)))
+def sleep(nm, now):
+    print "putting %s to sleep (%s)"%(devname(nm), now.strftime('%Y-%m-%d %H:%M:%S'))
+    subprocess.call(['hdparm', '-y', devname(nm)], stdout=DEVNULL, stderr=DEVNULL)
+
+def remind(nm, code, now):
+    if code is None: return
+    print "setting %s sleep time (%s)"%(devname(nm), now.strftime('%Y-%m-%d %H:%M:%S'))
+    subprocess.call(['hdparm', '-S%d'%code, devname(nm)], stdout=DEVNULL, stderr=DEVNULL)
 
 def state(disks):
     cmd = ['hdparm', '-C']
@@ -199,6 +218,16 @@ def stats(disks):
             ios = int(dd['currentIOs'])
             res[dd['devname']] = {'reads':reads, 'writes':writes, 'activeIOs':ios}
     return res
+
+def time2hdparm(seconds):
+    if 240*5 >= seconds:
+        return int((seconds+4)/5)
+    if 21*60 == seconds:
+        return 252
+    if (251-240)*1800 >= seconds:
+        idx = int((seconds+1800-1)/1800)
+        return idx+240
+    return None
 
 if __name__ == '__main__':
     main()
