@@ -65,6 +65,8 @@ def process(args):
             else:
                 print "can not find %s in %s"%(dn, diskpref)
                 return
+        else:
+            disks.append(dn)
     if minutes: 
         print "put drives to sleep in %.2f idle minutes"%(minutes)
     else:
